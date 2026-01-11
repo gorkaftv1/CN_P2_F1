@@ -1,4 +1,16 @@
+# Parámetros del script
+param(
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("race", "driver", "both")]
+    [string]$JobToRun = "both"
+)
+
 # Variables
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+$SrcDir = Join-Path $ProjectRoot "src"
+$ScriptsDir = Join-Path $ProjectRoot "scripts"
+
 $AWS_REGION = "us-east-1"
 $ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
 $BUCKET_NAME = "datalake-f1-driverstandings-$ACCOUNT_ID"
@@ -9,6 +21,8 @@ Write-Host "F1 Driver Standings - Setup Script" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Bucket: $BUCKET_NAME" -ForegroundColor Yellow
 Write-Host "Role: $ROLE_ARN" -ForegroundColor Yellow
+Write-Host "Project Root: $ProjectRoot" -ForegroundColor Yellow
+Write-Host "Job a ejecutar: $JobToRun" -ForegroundColor Yellow
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 # S3
@@ -31,7 +45,7 @@ aws kinesis create-stream --stream-name f1-driver-standings-stream --shard-count
 
 # Lambda
 Write-Host "[3/11] Creando Lambda Function..." -ForegroundColor Green
-Set-Location ..\src
+Set-Location $SrcDir
 if (Test-Path firehose_driver_standings.zip) { Remove-Item firehose_driver_standings.zip }
 Compress-Archive -Path firehose_driver_standings.py -DestinationPath firehose_driver_standings.zip -Force
 
@@ -47,7 +61,7 @@ Remove-Item firehose_driver_standings.zip
 
 $LAMBDA_ARN = aws lambda get-function --function-name f1-firehose-lambda --query 'Configuration.FunctionArn' --output text
 
-Set-Location ..\scripts
+Set-Location $ScriptsDir
 Write-Host "[4/11] Creando Firehose Delivery Stream..." -ForegroundColor Green
 
 # Firehose
@@ -110,12 +124,12 @@ Remove-Item crawler_targets.json
 Write-Host "[7/11] Subiendo scripts ETL a S3..." -ForegroundColor Green
 
 # Subir scripts ETL
-Set-Location ..\src
+Set-Location $SrcDir
 aws s3 cp standings_aggregation_by_race.py s3://$BUCKET_NAME/scripts/
 aws s3 cp driver_standing_aggregation_by_race.py s3://$BUCKET_NAME/scripts/
 aws s3 cp driver_standing_aggregation_by_driver.py s3://$BUCKET_NAME/scripts/
 Write-Host "[8/11] Creando Glue Jobs..." -ForegroundColor Green
-Set-Location ..\scripts
+Set-Location $ScriptsDir
 
 # Glue Jobs
 $DATABASE = "f1_db"
@@ -155,12 +169,19 @@ Remove-Item job_command.json, job_args.json
 
 # Ejecutar productor Kinesis
 Write-Host "[9/11] Ejecutando productor Kinesis..." -ForegroundColor Green
-Set-Location ..
+Set-Location $ProjectRoot
 if (Test-Path ".venv\Scripts\python.exe") {
-    .venv\Scripts\python.exe src\kinesis.py
+    & .venv\Scripts\python.exe src\kinesis.py
 } else {
-    python src\kinesis.py
+    & python src\kinesis.py
 }
+
+# Verificar que el productor terminó correctamente
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: El productor Kinesis falló con código de salida $LASTEXITCODE" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Productor Kinesis completado exitosamente" -ForegroundColor Green
 
 # Esperar a que los datos lleguen a S3
 Write-Host "[10/11] Esperando 90 segundos para que Firehose procese datos..." -ForegroundColor Green
@@ -174,43 +195,70 @@ Write-Host "Esperando 60 segundos para que el crawler termine..." -ForegroundCol
 Start-Sleep -Seconds 60
 
 # Ejecutar Jobs de Glue
-Write-Host "[11/11] Ejecutando Glue Jobs secuencialmente..." -ForegroundColor Green
+Write-Host "[11/11] Ejecutando Glue Jobs..." -ForegroundColor Green
 
-# Primer Job
-Write-Host "Lanzando job: driver-standings-by-race" -ForegroundColor Yellow
-$jobRun1 = aws glue start-job-run --job-name driver-standings-by-race | ConvertFrom-Json
-$runId1 = $jobRun1.JobRunId
-Write-Host "Job iniciado con Run ID: $runId1" -ForegroundColor Cyan
+if ($JobToRun -eq "race" -or $JobToRun -eq "both") {
+    # Primer Job
+    Write-Host "`nLanzando job: driver-standings-by-race" -ForegroundColor Yellow
+    $jobRun1 = aws glue start-job-run --job-name driver-standings-by-race | ConvertFrom-Json
+    $runId1 = $jobRun1.JobRunId
+    Write-Host "Job iniciado con Run ID: $runId1" -ForegroundColor Cyan
 
-# Monitorear primer job
-Write-Host "Monitoreando ejecucion del primer job..." -ForegroundColor Yellow
-$maxWait = 600  # 10 minutos máximo
-$waited = 0
-while ($waited -lt $maxWait) {
-    $jobStatus = (aws glue get-job-run --job-name driver-standings-by-race --run-id $runId1 | ConvertFrom-Json).JobRun.JobRunState
-    if ($jobStatus -in @("SUCCEEDED", "FAILED", "STOPPED", "TIMEOUT")) {
-        Write-Host "Job terminado con estado: $jobStatus" -ForegroundColor $(if($jobStatus -eq "SUCCEEDED"){"Green"}else{"Red"})
-        break
+    # Monitorear primer job
+    Write-Host "Monitoreando ejecucion del job..." -ForegroundColor Yellow
+    $maxWait = 600  # 10 minutos máximo
+    $waited = 0
+    while ($waited -lt $maxWait) {
+        $jobStatus = (aws glue get-job-run --job-name driver-standings-by-race --run-id $runId1 | ConvertFrom-Json).JobRun.JobRunState
+        if ($jobStatus -in @("SUCCEEDED", "FAILED", "STOPPED", "TIMEOUT")) {
+            Write-Host "Job terminado con estado: $jobStatus" -ForegroundColor $(if($jobStatus -eq "SUCCEEDED"){"Green"}else{"Red"})
+            break
+        }
+        Write-Host "  Estado: $jobStatus (esperando...)" -ForegroundColor Gray
+        Start-Sleep -Seconds 15
+        $waited += 15
     }
-    Write-Host "  Estado: $jobStatus (esperando...)" -ForegroundColor Gray
-    Start-Sleep -Seconds 15
-    $waited += 15
+
+    if ($waited -ge $maxWait) {
+        Write-Host "Timeout esperando al job. Continuando..." -ForegroundColor DarkYellow
+    }
 }
 
-if ($waited -ge $maxWait) {
-    Write-Host "Timeout esperando al primer job. Continuando..." -ForegroundColor DarkYellow
-}
+if ($JobToRun -eq "driver" -or $JobToRun -eq "both") {
+    # Segundo Job
+    Write-Host "`nLanzando job: driver-standings-by-driver" -ForegroundColor Yellow
+    $jobRun2 = aws glue start-job-run --job-name driver-standings-by-driver | ConvertFrom-Json
+    $runId2 = $jobRun2.JobRunId
+    Write-Host "Job iniciado con Run ID: $runId2" -ForegroundColor Cyan
 
-# Segundo Job
-Write-Host "`nLanzando job: driver-standings-by-driver" -ForegroundColor Yellow
-$jobRun2 = aws glue start-job-run --job-name driver-standings-by-driver | ConvertFrom-Json
-$runId2 = $jobRun2.JobRunId
-Write-Host "Job iniciado con Run ID: $runId2" -ForegroundColor Cyan
+    if ($JobToRun -eq "driver") {
+        # Si solo ejecutamos este job, monitorearlo
+        Write-Host "Monitoreando ejecucion del job..." -ForegroundColor Yellow
+        $maxWait = 600
+        $waited = 0
+        while ($waited -lt $maxWait) {
+            $jobStatus = (aws glue get-job-run --job-name driver-standings-by-driver --run-id $runId2 | ConvertFrom-Json).JobRun.JobRunState
+            if ($jobStatus -in @("SUCCEEDED", "FAILED", "STOPPED", "TIMEOUT")) {
+                Write-Host "Job terminado con estado: $jobStatus" -ForegroundColor $(if($jobStatus -eq "SUCCEEDED"){"Green"}else{"Red"})
+                break
+            }
+            Write-Host "  Estado: $jobStatus (esperando...)" -ForegroundColor Gray
+            Start-Sleep -Seconds 15
+            $waited += 15
+        }
+    }
+}
 
 # Ver estado de los jobs
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "SETUP COMPLETADO" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "`nEstado de los jobs:" -ForegroundColor Yellow
-aws glue get-job-runs --job-name driver-standings-by-race --max-items 1
-aws glue get-job-runs --job-name driver-standings-by-driver --max-items 1
+
+if ($JobToRun -eq "race" -or $JobToRun -eq "both") {
+    aws glue get-job-runs --job-name driver-standings-by-race --max-items 1
+}
+
+if ($JobToRun -eq "driver" -or $JobToRun -eq "both") {
+    aws glue get-job-runs --job-name driver-standings-by-driver --max-items 1
+}
