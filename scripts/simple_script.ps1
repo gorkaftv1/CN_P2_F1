@@ -38,6 +38,7 @@ aws s3api put-object --bucket $BUCKET_NAME --key config/
 aws s3api put-object --bucket $BUCKET_NAME --key scripts/
 aws s3api put-object --bucket $BUCKET_NAME --key queries/
 aws s3api put-object --bucket $BUCKET_NAME --key errors/
+aws s3api put-object --bucket $BUCKET_NAME --key logs/
 
 # Kinesis
 Write-Host "[2/11] Creando Kinesis Stream..." -ForegroundColor Green
@@ -68,7 +69,7 @@ Write-Host "[4/11] Creando Firehose Delivery Stream..." -ForegroundColor Green
 $firehoseConfig = @{
     BucketARN = "arn:aws:s3:::$BUCKET_NAME"
     RoleARN = $ROLE_ARN
-    Prefix = "raw/f1_driver_standings/raceId=!{partitionKeyFromLambda:raceId}/driverId=!{partitionKeyFromLambda:driverId}/"
+    Prefix = "raw/f1_driver_standings/driverId=!{partitionKeyFromLambda:driverId}/"
     ErrorOutputPrefix = "errors/!{firehose:error-output-type}/"
     BufferingHints = @{ SizeInMBs = 64; IntervalInSeconds = 60 }
     CompressionFormat = "UNCOMPRESSED"
@@ -116,6 +117,30 @@ $crawlerTargets | ConvertTo-Json -Depth 10 | Set-Content crawler_targets.json
 
 aws glue create-crawler `
     --name f1-driver-standings-raw-crawler `
+    --role $ROLE_ARN `
+    --database-name f1_db `
+    --targets file://crawler_targets.json
+
+Remove-Item crawler_targets.json
+
+# Crawler para processed/driver_standings_by_race
+$crawlerTargets = @{ S3Targets = @( @{ Path = "s3://$BUCKET_NAME/processed/driver_standings_by_race" } ) }
+$crawlerTargets | ConvertTo-Json -Depth 10 | Set-Content crawler_targets.json
+
+aws glue create-crawler `
+    --name f1-driver-standings-by-race-crawler `
+    --role $ROLE_ARN `
+    --database-name f1_db `
+    --targets file://crawler_targets.json
+
+Remove-Item crawler_targets.json
+
+# Crawler para processed/driver_standings_by_driver
+$crawlerTargets = @{ S3Targets = @( @{ Path = "s3://$BUCKET_NAME/processed/driver_standings_by_driver" } ) }
+$crawlerTargets | ConvertTo-Json -Depth 10 | Set-Content crawler_targets.json
+
+aws glue create-crawler `
+    --name f1-driver-standings-by-driver-crawler `
     --role $ROLE_ARN `
     --database-name f1_db `
     --targets file://crawler_targets.json
@@ -222,6 +247,13 @@ if ($JobToRun -eq "race" -or $JobToRun -eq "both") {
     if ($waited -ge $maxWait) {
         Write-Host "Timeout esperando al job. Continuando..." -ForegroundColor DarkYellow
     }
+    
+    # Si el job terminó exitosamente, ejecutar el crawler para by_race
+    if ($jobStatus -eq "SUCCEEDED") {
+        Write-Host "`nEjecutando crawler para driver_standings_by_race..." -ForegroundColor Yellow
+        aws glue start-crawler --name f1-driver-standings-by-race-crawler
+        Write-Host "Crawler f1-driver-standings-by-race-crawler iniciado" -ForegroundColor Green
+    }
 }
 
 if ($JobToRun -eq "driver" -or $JobToRun -eq "both") {
@@ -246,6 +278,18 @@ if ($JobToRun -eq "driver" -or $JobToRun -eq "both") {
             Start-Sleep -Seconds 15
             $waited += 15
         }
+        
+        # Si el job terminó exitosamente, ejecutar el crawler para by_driver
+        if ($jobStatus -eq "SUCCEEDED") {
+            Write-Host "`nEjecutando crawler para driver_standings_by_driver..." -ForegroundColor Yellow
+            aws glue start-crawler --name f1-driver-standings-by-driver-crawler
+            Write-Host "Crawler f1-driver-standings-by-driver-crawler iniciado" -ForegroundColor Green
+        }
+    } else {
+        # Si ejecutamos both, también lanzar el crawler
+        Write-Host "`nEjecutando crawler para driver_standings_by_driver..." -ForegroundColor Yellow
+        aws glue start-crawler --name f1-driver-standings-by-driver-crawler
+        Write-Host "Crawler f1-driver-standings-by-driver-crawler iniciado" -ForegroundColor Green
     }
 }
 
@@ -262,3 +306,5 @@ if ($JobToRun -eq "race" -or $JobToRun -eq "both") {
 if ($JobToRun -eq "driver" -or $JobToRun -eq "both") {
     aws glue get-job-runs --job-name driver-standings-by-driver --max-items 1
 }
+
+Write-Host "`nPara probar Athena, ejecuta: .\scripts\athena_queries.ps1" -ForegroundColor Cyan

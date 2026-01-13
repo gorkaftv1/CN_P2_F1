@@ -1,13 +1,16 @@
 import boto3
 import csv
-import time
+import json
 import sys
+import time
 from pathlib import Path
 from loguru import logger
 
 # CONFIGURACIÓN
 STREAM_NAME = 'f1-driver-standings-stream'
 REGION = 'us-east-1'  # Cambia si usas otra región
+BATCH_SIZE = 100  # Reducido para evitar problemas con Firehose
+BATCH_DELAY = 1.0  # Segundos de espera entre batches (aumentado para dar tiempo a Firehose)
 
 INPUT_FILE = Path('data') / 'driver_standings_with_info.csv'
 
@@ -39,43 +42,66 @@ def run_producer():
         sys.exit(1)
 
     data = load_csv_data(INPUT_FILE)
+    total_records = len(data)
     records_sent = 0
     
-    logger.info(f"Iniciando transmisión al stream: {STREAM_NAME}...")
-    logger.info(f"Total de registros a enviar: {len(data)}")
+    logger.info(f"Iniciando transmision al stream: {STREAM_NAME}...")
+    logger.info(f"Total de registros a enviar: {total_records}")
+    logger.info(f"Usando batches de {BATCH_SIZE} registros con {BATCH_DELAY}s de espera entre batches")
     
-    for registro in data:
-        # Estructura del mensaje a enviar
-        payload = {
-            'driverStandingsId': to_int(registro.get('driverStandingsId')),
-            'raceId': to_int(registro.get('raceId')),
-            'driverId': to_int(registro.get('driverId')),
-            'points': to_int(registro.get('points')),
-            'position': to_int(registro.get('position')),
-            'positionText': registro.get('positionText'),
-            'wins': to_int(registro.get('wins')),
-            'forename': registro.get('forename'),
-            'surname': registro.get('surname'),
-            'dob': registro.get('dob'),
-            'nationality': registro.get('nationality')
-        }
+    # Procesar en batches
+    for i in range(0, total_records, BATCH_SIZE):
+        batch = data[i:i+BATCH_SIZE]
+        records = []
         
-        # Enviar a Kinesis usando raceId como clave de partición
-        response = kinesis.put_record(
-            StreamName=STREAM_NAME,
-            Data=str(payload).replace("'", '"'),  # Convertir a formato JSON
-            PartitionKey=registro['raceId']  # Usamos raceId como clave de partición
-        )
+        for registro in batch:
+            # Estructura del mensaje a enviar
+            payload = {
+                'driverStandingsId': to_int(registro.get('driverStandingsId')),
+                'raceId': to_int(registro.get('raceId')),
+                'driverId': to_int(registro.get('driverId')),
+                'points': to_int(registro.get('points')),
+                'position': to_int(registro.get('position')),
+                'positionText': registro.get('positionText'),
+                'wins': to_int(registro.get('wins')),
+                'forename': registro.get('forename'),
+                'surname': registro.get('surname'),
+                'dob': registro.get('dob'),
+                'nationality': registro.get('nationality')
+            }
+            
+            records.append({
+                'Data': json.dumps(payload),
+                'PartitionKey': str(registro['driverId'])  # Usar driverId para mejor distribucion
+            })
         
-        records_sent += 1
-        
-        if records_sent % 100 == 0:  # Log cada 100 registros
-            logger.info(f"Progreso: {records_sent}/{len(data)} registros enviados")
-        
-        # Pequeña pausa para simular streaming y no saturar de golpe
-        time.sleep(0.05)  # 50ms entre registros
+        # Enviar batch a Kinesis
+        try:
+            response = kinesis.put_records(
+                StreamName=STREAM_NAME,
+                Records=records
+            )
+            
+            # Verificar si hubo errores
+            failed_count = response['FailedRecordCount']
+            if failed_count > 0:
+                logger.warning(f"Batch {i//BATCH_SIZE + 1}: {failed_count} registros fallaron")
+            
+            records_sent += len(records) - failed_count
+            logger.info(f"Progreso: {records_sent}/{total_records} registros enviados ({(records_sent/total_records)*100:.1f}%)")
+            
+            # Esperar entre batches (excepto en el ultimo)
+            if i + BATCH_SIZE < total_records:
+                time.sleep(BATCH_DELAY)
+            
+        except Exception as e:
+            logger.error(f"Error enviando batch: {e}")
+            continue
 
-    logger.info(f"Fin de la transmisión. Total registros enviados: {records_sent}")
+    logger.success(f"Transmision completada! Total registros enviados: {records_sent}/{total_records}")
+    
+    if records_sent < total_records:
+        logger.warning(f"Algunos registros no se enviaron: {total_records - records_sent} fallaron")
 
 if __name__ == '__main__':
     run_producer()

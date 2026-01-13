@@ -1,4 +1,4 @@
-# Script de limpieza - Elimina todos los recursos creados por simple_script.ps1
+# Script de limpieza - Elimina todos los recursos creados por simple_script.ps1 y timed_script.ps1
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
@@ -15,7 +15,7 @@ Write-Host "Account ID: $ACCOUNT_ID" -ForegroundColor Yellow
 Write-Host "========================================`n" -ForegroundColor Red
 
 Write-Host "ADVERTENCIA: Este script eliminara TODOS los recursos creados." -ForegroundColor Yellow
-$confirm = Read-Host "¿Estas seguro? (escribe 'SI' para continuar)"
+$confirm = Read-Host "Estas seguro? (escribe 'SI' para continuar)"
 if ($confirm -ne "SI") {
     Write-Host "Operacion cancelada." -ForegroundColor Green
     exit
@@ -37,13 +37,20 @@ try {
     Write-Host "  Job 'driver-standings-by-driver' no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
-# 2. Eliminar Glue Crawler
-Write-Host "`n[2/8] Eliminando Glue Crawler..." -ForegroundColor Cyan
+# 2. Eliminar Glue Crawlers
+Write-Host "`n[2/8] Eliminando Glue Crawlers..." -ForegroundColor Cyan
 try {
     aws glue delete-crawler --name f1-driver-standings-raw-crawler
-    Write-Host "  Crawler eliminado" -ForegroundColor Green
+    Write-Host "  Crawler RAW eliminado" -ForegroundColor Green
 } catch {
-    Write-Host "  Crawler no existe o ya fue eliminado" -ForegroundColor DarkYellow
+    Write-Host "  Crawler RAW no existe o ya fue eliminado" -ForegroundColor DarkYellow
+}
+
+try {
+    aws glue delete-crawler --name f1-driver-standings-processed-crawler
+    Write-Host "  Crawler processed eliminado" -ForegroundColor Green
+} catch {
+    Write-Host "  Crawler processed no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
 # 3. Eliminar Glue Database (y todas sus tablas)
@@ -113,6 +120,13 @@ foreach ($file in $tempFiles) {
         Write-Host "  Eliminado: $file" -ForegroundColor Green
     }
 }
+
+# Limpiar archivos temporales de queries SQL
+Write-Host "  Limpiando archivos temporales de queries..." -ForegroundColor Yellow
+Set-Location $ScriptDir
+Get-ChildItem -Filter "temp_query_*.sql" | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Filter "query_result_*.csv" | Remove-Item -Force -ErrorAction SilentlyContinue
+Write-Host "  Archivos temporales de queries eliminados" -ForegroundColor Green
 
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "LIMPIEZA COMPLETADA" -ForegroundColor Green
