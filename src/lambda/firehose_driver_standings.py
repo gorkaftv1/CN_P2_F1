@@ -1,14 +1,3 @@
-"""
-Lambda para transformar datos de Firehose y particionar por fecha.
-
-Flujo: Kinesis Stream -> Firehose -> Lambda -> S3 raw/f1_driver_standings/partition_date=YYYY-MM-DD/
-
-La Lambda:
-1. Extrae la fecha actual para usarla como clave de partición
-2. Elimina 'positionText' (campo redundante)
-3. Devuelve datos transformados con metadata de partición
-"""
-
 import json
 import base64
 from datetime import datetime

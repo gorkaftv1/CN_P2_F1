@@ -97,7 +97,7 @@ $query2 = "SELECT raceId, COUNT(DISTINCT driverId) as num_drivers, SUM(points) a
 $query3 = "SELECT forename, surname, nationality, MAX(wins) as total_wins FROM f1_db.f1_driver_standings GROUP BY forename, surname, nationality HAVING MAX(wins) > 0 ORDER BY total_wins DESC LIMIT 10"
 
 # Query 4: Top pilotos por puntos agregados (si existe tabla by_driver)
-$query4 = "SELECT driverId, forename, surname, total_points, avg_position, num_races FROM f1_db.driver_standings_by_driver ORDER BY total_points DESC LIMIT 10"
+$query4 = "SELECT driverId, forename, surname, total_points, posicion_promedio_historica, num_races FROM f1_db.driver_standings_by_driver ORDER BY total_points DESC LIMIT 10"
 
 # Query 5: Carreras con mas participantes (si existe tabla by_race)
 $query5 = "SELECT raceId, total_drivers, total_points, top_driver_forename, top_driver_surname, top_driver_victories FROM f1_db.driver_standings_by_race ORDER BY total_drivers DESC LIMIT 10"

@@ -11,7 +11,8 @@ REGION = 'us-east-1'
 BATCH_SIZE = 100
 BATCH_DELAY = 2.1
 
-INPUT_FILE = Path('data') / 'driver_standings_with_info.csv'
+# Ruta relativa al proyecto root (sube 2 niveles desde src/producer/)
+INPUT_FILE = Path(__file__).parent.parent.parent / 'data' / 'driver_standings_with_info.csv'
 kinesis = boto3.client('kinesis', region_name=REGION)
 
 def load_csv_data(file_path):
