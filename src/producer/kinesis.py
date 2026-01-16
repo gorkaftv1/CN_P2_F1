@@ -6,18 +6,15 @@ import time
 from pathlib import Path
 from loguru import logger
 
-# CONFIGURACIÓN
 STREAM_NAME = 'f1-driver-standings-stream'
-REGION = 'us-east-1'  # Cambia si usas otra región
-BATCH_SIZE = 100  # Reducido para evitar problemas con Firehose
-BATCH_DELAY = 1.0  # Segundos de espera entre batches (aumentado para dar tiempo a Firehose)
+REGION = 'us-east-1'
+BATCH_SIZE = 100
+BATCH_DELAY = 2.1
 
 INPUT_FILE = Path('data') / 'driver_standings_with_info.csv'
-
 kinesis = boto3.client('kinesis', region_name=REGION)
 
 def load_csv_data(file_path):
-    """Carga los datos del CSV y los convierte en lista de diccionarios"""
     data = []
     with open(file_path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -35,7 +32,6 @@ def to_int(val, default=0):
         return default
 
 def run_producer():
-    # usar la ruta fija proporcionada por el usuario
     if not INPUT_FILE.exists():
         logger.error("Fichero no encontrado: %s", INPUT_FILE)
         logger.error("Genera el CSV con: python src/merge_driver_standings.py\nLuego ejecuta: python src/kinesis.py")
@@ -49,13 +45,11 @@ def run_producer():
     logger.info(f"Total de registros a enviar: {total_records}")
     logger.info(f"Usando batches de {BATCH_SIZE} registros con {BATCH_DELAY}s de espera entre batches")
     
-    # Procesar en batches
     for i in range(0, total_records, BATCH_SIZE):
         batch = data[i:i+BATCH_SIZE]
         records = []
         
         for registro in batch:
-            # Estructura del mensaje a enviar
             payload = {
                 'driverStandingsId': to_int(registro.get('driverStandingsId')),
                 'raceId': to_int(registro.get('raceId')),
@@ -72,17 +66,15 @@ def run_producer():
             
             records.append({
                 'Data': json.dumps(payload),
-                'PartitionKey': str(registro['driverId'])  # Usar driverId para mejor distribucion
+                'PartitionKey': str(registro['driverId'])
             })
         
-        # Enviar batch a Kinesis
         try:
             response = kinesis.put_records(
                 StreamName=STREAM_NAME,
                 Records=records
             )
             
-            # Verificar si hubo errores
             failed_count = response['FailedRecordCount']
             if failed_count > 0:
                 logger.warning(f"Batch {i//BATCH_SIZE + 1}: {failed_count} registros fallaron")
@@ -90,7 +82,6 @@ def run_producer():
             records_sent += len(records) - failed_count
             logger.info(f"Progreso: {records_sent}/{total_records} registros enviados ({(records_sent/total_records)*100:.1f}%)")
             
-            # Esperar entre batches (excepto en el ultimo)
             if i + BATCH_SIZE < total_records:
                 time.sleep(BATCH_DELAY)
             

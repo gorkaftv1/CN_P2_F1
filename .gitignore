@@ -66,6 +66,9 @@ config
 configure_aws.ps1
 **/configure_aws.ps1
 
+# Cost analysis documentation (private)
+COSTOS_Y_EXPLICACION.txt
+
 # Old scripts
 old_scripts/
 **/old_scripts/

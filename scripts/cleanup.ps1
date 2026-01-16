@@ -14,14 +14,7 @@ Write-Host "Bucket a eliminar: $BUCKET_NAME" -ForegroundColor Yellow
 Write-Host "Account ID: $ACCOUNT_ID" -ForegroundColor Yellow
 Write-Host "========================================`n" -ForegroundColor Red
 
-Write-Host "ADVERTENCIA: Este script eliminara TODOS los recursos creados." -ForegroundColor Yellow
-$confirm = Read-Host "Estas seguro? (escribe 'SI' para continuar)"
-if ($confirm -ne "SI") {
-    Write-Host "Operacion cancelada." -ForegroundColor Green
-    exit
-}
-
-# 1. Eliminar Glue Jobs
+Write-Host "[1/8] Eliminando Glue Jobs..." -ForegroundColor Cyan
 Write-Host "`n[1/8] Eliminando Glue Jobs..." -ForegroundColor Cyan
 try {
     aws glue delete-job --job-name driver-standings-by-race
@@ -37,7 +30,7 @@ try {
     Write-Host "  Job 'driver-standings-by-driver' no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
-# 2. Eliminar Glue Crawlers
+
 Write-Host "`n[2/8] Eliminando Glue Crawlers..." -ForegroundColor Cyan
 try {
     aws glue delete-crawler --name f1-driver-standings-raw-crawler
@@ -53,7 +46,6 @@ try {
     Write-Host "  Crawler processed no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
-# 3. Eliminar Glue Database (y todas sus tablas)
 Write-Host "`n[3/8] Eliminando Glue Database..." -ForegroundColor Cyan
 try {
     aws glue delete-database --name f1_db
@@ -62,7 +54,6 @@ try {
     Write-Host "  Database no existe o ya fue eliminada" -ForegroundColor DarkYellow
 }
 
-# 4. Eliminar Firehose Delivery Stream
 Write-Host "`n[4/8] Eliminando Firehose Delivery Stream..." -ForegroundColor Cyan
 try {
     aws firehose delete-delivery-stream --delivery-stream-name f1-driver-standings-delivery-stream
@@ -72,7 +63,6 @@ try {
     Write-Host "  Firehose no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
-# 5. Eliminar Lambda Function
 Write-Host "`n[5/8] Eliminando Lambda Function..." -ForegroundColor Cyan
 try {
     aws lambda delete-function --function-name f1-firehose-lambda
@@ -81,7 +71,6 @@ try {
     Write-Host "  Lambda no existe o ya fue eliminada" -ForegroundColor DarkYellow
 }
 
-# 6. Eliminar Kinesis Stream
 Write-Host "`n[6/8] Eliminando Kinesis Stream..." -ForegroundColor Cyan
 try {
     aws kinesis delete-stream --stream-name f1-driver-standings-stream
@@ -90,7 +79,6 @@ try {
     Write-Host "  Kinesis Stream no existe o ya fue eliminado" -ForegroundColor DarkYellow
 }
 
-# 7. Vaciar y eliminar S3 Bucket
 Write-Host "`n[7/8] Vaciando y eliminando S3 Bucket..." -ForegroundColor Cyan
 try {
     Write-Host "  Vaciando bucket..." -ForegroundColor Yellow
@@ -102,7 +90,6 @@ try {
     Write-Host "  Error al eliminar bucket (puede que no exista)" -ForegroundColor DarkYellow
 }
 
-# 8. Limpiar archivos temporales locales
 Write-Host "`n[8/8] Limpiando archivos temporales locales..." -ForegroundColor Cyan
 Set-Location $ProjectRoot
 $tempFiles = @(
@@ -121,7 +108,6 @@ foreach ($file in $tempFiles) {
     }
 }
 
-# Limpiar archivos temporales de queries SQL
 Write-Host "  Limpiando archivos temporales de queries..." -ForegroundColor Yellow
 Set-Location $ScriptDir
 Get-ChildItem -Filter "temp_query_*.sql" | Remove-Item -Force -ErrorAction SilentlyContinue

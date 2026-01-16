@@ -20,24 +20,29 @@ def main():
     sc = SparkContext()
     glueContext = GlueContext(sc)
     
-    # Leer desde Glue Catalog usando GlueContext
     dynamic_frame = glueContext.create_dynamic_frame.from_catalog(
         database=database,
         table_name=table
     )
     
-    # Convertir a Spark DataFrame
     df = dynamic_frame.toDF()
     df.printSchema()
     logger.info(f"Registros leídos: {df.count()}")
     
-    # Agregación general por piloto (driverId)
+    # Agregación por piloto: estadísticas de cada driverId
+    # Usamos first() para obtener forename y surname (son constantes por driverId)
+    from pyspark.sql.functions import first, sum as spark_sum
+    
     driver_df = df.groupBy("driverId") \
         .agg(
+            first("forename").alias("forename"),
+            first("surname").alias("surname"),
             spark_min("position").alias("mejor_posicion_historica"),
             avg("position").alias("posicion_promedio_historica"),
             stddev("position").alias("desviacion_estandar_posicion"),
-            count("raceId").alias("total_carreras_participadas")
+            count("raceId").alias("num_races"),
+            spark_sum(col("points")).alias("total_points"),
+            avg("points").alias("avg_points")
         ) \
         .orderBy("driverId")
     
@@ -45,13 +50,12 @@ def main():
     
     logger.info(f"Registros agregados: {output_dynamic_frame.count()}")
     
-    # Escribir usando GlueContext
+    # Escribir sin particionKeys ya que driverId es la clave de agregación
     glueContext.write_dynamic_frame.from_options(
         frame=output_dynamic_frame,
         connection_type="s3",
         connection_options={
-            "path": output_path,
-            "partitionKeys": ["driverId"]
+            "path": output_path
         },
         format="parquet",
         format_options={"compression": "snappy"}

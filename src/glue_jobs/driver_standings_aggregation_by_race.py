@@ -1,4 +1,3 @@
-# driver_standings_aggregation_by_race.py
 import sys
 import logging
 from pyspark.context import SparkContext
@@ -22,31 +21,25 @@ def main():
     sc = SparkContext()
     glueContext = GlueContext(sc)
     
-    # Leer desde Glue Catalog usando GlueContext
     dynamic_frame = glueContext.create_dynamic_frame.from_catalog(
         database=database,
         table_name=table
     )
     
-    # Convertir a Spark DataFrame
     df = dynamic_frame.toDF()
     df.printSchema()
     logger.info(f"Registros leídos: {df.count()}")
     
-    # Para cada raceId, contar cuántos position=1 tiene cada piloto
-    # y obtener el piloto con más victorias (position=1)
     df_with_wins = df.withColumn(
         "is_winner",
         when(col("position") == 1, 1).otherwise(0)
     )
     
-    # Agregación por raceId y driverId para contar victorias
     wins_by_driver = df_with_wins.groupBy("raceId", "driverId", "forename", "surname") \
         .agg(
             spark_sum("is_winner").alias("num_victories")
         )
     
-    # Para cada raceId, obtener el piloto con más victorias
     window = Window.partitionBy("raceId").orderBy(col("num_victories").desc())
     from pyspark.sql.functions import row_number
     
@@ -55,7 +48,6 @@ def main():
         .filter(col("rank") == 1) \
         .select("raceId", "driverId", "forename", "surname", "num_victories")
     
-    # Agregación general por carrera (raceId)
     race_df = df.groupBy("raceId") \
         .agg(
             countDistinct("driverId").alias("total_drivers"),
@@ -63,7 +55,6 @@ def main():
             count("*").alias("total_records")
         )
     
-    # Join con el piloto con más victorias
     result_df = race_df.join(top_driver, "raceId", "left") \
         .select(
             "raceId",
@@ -81,7 +72,6 @@ def main():
     
     logger.info(f"Registros agregados: {output_dynamic_frame.count()}")
     
-    # Escribir usando GlueContext con particiones por raceId
     glueContext.write_dynamic_frame.from_options(
         frame=output_dynamic_frame,
         connection_type="s3",
